@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sensor_data.dart';
 import '../models/prediction.dart';
 import '../services/api_service.dart';
+import '../services/firestore_service.dart';
 import '../widgets/sensor_card.dart';
 import '../widgets/risk_indicator.dart';
 import '../widgets/insight_panel.dart';
@@ -32,6 +33,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen>
     with SingleTickerProviderStateMixin {
   ApiService? _api;
+  final FirestoreService _firestoreService = FirestoreService();
   Timer? _timer;
   bool _isMonitoring = false;
   String? _error;
@@ -104,6 +106,12 @@ class _DashboardScreenState extends State<DashboardScreen>
       final data = await _api!.fetchRandomData();
       final prediction = await _api!.predictFallRisk(data);
 
+      // Store in Firestore
+      _firestoreService.savePrediction(
+        sensorData: data,
+        risk: prediction.risk,
+      );
+
       if (prediction.isHighRisk) {
         _api!.sendEmailAlert(
           senderEmail: _senderEmail,
@@ -111,6 +119,12 @@ class _DashboardScreenState extends State<DashboardScreen>
           receiverEmail: _receiverEmail,
           sensorData: data,
           risk: prediction.risk,
+        );
+        // Record alert in Firestore
+        _firestoreService.saveAlert(
+          sensorData: data,
+          risk: prediction.risk,
+          emailSent: true,
         );
       }
 

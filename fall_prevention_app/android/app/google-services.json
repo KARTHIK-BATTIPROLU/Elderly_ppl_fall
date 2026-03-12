@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "434300558465",
+    "project_id": "fall-prevention-sys-26",
+    "storage_bucket": "fall-prevention-sys-26.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:434300558465:android:c380e0d322f6b61c040180",
+        "android_client_info": {
+          "package_name": "com.eldercare.fall_prevention_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCzva1XdOs-F8kf7uSSw9buQqyomSOY5UA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

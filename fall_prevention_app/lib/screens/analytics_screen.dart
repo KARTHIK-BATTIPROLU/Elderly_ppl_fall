@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sensor_data.dart';
 import '../services/api_service.dart';
+import '../services/firestore_service.dart';
 import '../widgets/charts.dart';
 
 class AnalyticsScreen extends StatefulWidget {
@@ -14,6 +15,7 @@ class AnalyticsScreen extends StatefulWidget {
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
   ApiService? _api;
+  final FirestoreService _firestoreService = FirestoreService();
   Timer? _timer;
   bool _isLive = false;
   String? _error;
@@ -43,11 +45,37 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   Future<void> _initApi() async {
     final prefs = await SharedPreferences.getInstance();
-    final serverUrl = prefs.getString('server_url') ?? 'http://10.0.2.2:5000';
+    final serverUrl = prefs.getString('server_url') ?? 'http://localhost:5000';
     setState(() {
       _api = ApiService(baseUrl: serverUrl);
     });
+    await _loadFirestoreHistory();
     _startLiveFeed();
+  }
+
+  Future<void> _loadFirestoreHistory() async {
+    try {
+      final history = await _firestoreService.getRecentPredictions(limit: _maxPoints);
+      if (!mounted || history.isEmpty) return;
+      setState(() {
+        for (final record in history) {
+          final sensor = record['sensor_data'] as Map<String, dynamic>?;
+          if (sensor == null) continue;
+          _heartRates.add((sensor['heart_rate'] as num?)?.toInt() ?? 0);
+          _chestX.add((sensor['chest_acc_x'] as num?)?.toDouble() ?? 0);
+          _chestY.add((sensor['chest_acc_y'] as num?)?.toDouble() ?? 0);
+          _chestZ.add((sensor['chest_acc_z'] as num?)?.toDouble() ?? 0);
+          _wristX.add((sensor['wrist_acc_x'] as num?)?.toDouble() ?? 0);
+          _wristY.add((sensor['wrist_acc_y'] as num?)?.toDouble() ?? 0);
+          _wristZ.add((sensor['wrist_acc_z'] as num?)?.toDouble() ?? 0);
+          _risks.add((record['risk'] as num?)?.toInt() ?? 0);
+          _postures.add((sensor['body_posture'] as num?)?.toInt() ?? 0);
+        }
+        _fetchCount = _heartRates.length;
+      });
+    } catch (_) {
+      // Firestore may not have data yet; continue with live feed only
+    }
   }
 
   void _startLiveFeed() {
