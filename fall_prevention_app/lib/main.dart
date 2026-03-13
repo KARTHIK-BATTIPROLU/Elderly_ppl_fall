@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
+import 'services/auth_service.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,11 +13,22 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // Request notification permissions & retrieve FCM token
+  final authService = AuthService();
+  final notificationService = NotificationService();
+
+  final credential = await FirebaseAuth.instance.signInAnonymously();
+  if (kDebugMode) {
+    print('Authenticated UID: ${credential.user?.uid}');
+  }
+  await authService.signInAnonymously();
+  await notificationService.initialize();
+  notificationService.listenForTokenRefresh(authService);
+
   try {
-    final messaging = FirebaseMessaging.instance;
-    await messaging.requestPermission();
-    final token = await messaging.getToken();
+    final token = await notificationService.getToken();
+    if (token != null && token.isNotEmpty) {
+      await authService.updateDeviceToken(token);
+    }
     if (kDebugMode) {
       print('FCM Token: $token');
     }

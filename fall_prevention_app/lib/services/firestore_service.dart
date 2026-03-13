@@ -12,19 +12,24 @@ class FirestoreService {
   // ── Save sensor reading + prediction ──
   Future<void> savePrediction({
     required SensorData sensorData,
-    required int risk,
+    required double riskScore,
+    required bool fallDetected,
   }) async {
     final timestamp = FieldValue.serverTimestamp();
     final sensorMap = sensorData.toJson();
 
     await _db.collection(_predictions).add({
       'sensor_data': sensorMap,
-      'risk': risk,
+      'risk': fallDetected ? 1 : 0,
+      'risk_score': riskScore,
+      'fall_detected': fallDetected,
       'timestamp': timestamp,
     });
 
     await _db.collection(_sensorReadings).add({
       ...sensorMap,
+      'risk_score': riskScore,
+      'fall_detected': fallDetected,
       'timestamp': timestamp,
     });
   }
@@ -32,13 +37,15 @@ class FirestoreService {
   // ── Save alert record ──
   Future<void> saveAlert({
     required SensorData sensorData,
-    required int risk,
-    required bool emailSent,
+    required double riskScore,
+    required bool fallDetected,
   }) async {
     await _db.collection(_alerts).add({
       'sensor_data': sensorData.toJson(),
-      'risk': risk,
-      'email_sent': emailSent,
+      'risk': fallDetected ? 1 : 0,
+      'risk_score': riskScore,
+      'fall_detected': fallDetected,
+      'notification_sent': true,
       'timestamp': FieldValue.serverTimestamp(),
     });
   }

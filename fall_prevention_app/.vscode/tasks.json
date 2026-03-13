@@ -1,0 +1,31 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Flutter Android USB",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"run",
+				"-d",
+				"ZD222QLRV7",
+				"--dart-define=BACKEND_URL=http://127.0.0.1:8000"
+			],
+			"isBackground": true,
+			"group": "build"
+		},
+		{
+			"label": "Run Flutter on Motorola",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"run",
+				"-d",
+				"ZD222QLRV7",
+				"--dart-define=BACKEND_URL=http://127.0.0.1:8000"
+			],
+			"isBackground": true,
+			"group": "build"
+		}
+	]
+}

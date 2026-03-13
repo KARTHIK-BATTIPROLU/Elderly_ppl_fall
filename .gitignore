@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Logs
+*.log
+firebase-debug.log
+
+# Flutter build outputs
+fall_prevention_app/build/
+fall_prevention_app/.dart_tool/

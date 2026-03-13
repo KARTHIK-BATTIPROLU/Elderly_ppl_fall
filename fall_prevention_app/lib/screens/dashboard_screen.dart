@@ -13,12 +13,14 @@ import 'login_screen.dart';
 
 class _PredictionLogEntry {
   final DateTime timestamp;
-  final int risk;
+  final double riskScore;
+  final bool fallDetected;
   final SensorData data;
 
   _PredictionLogEntry({
     required this.timestamp,
-    required this.risk,
+    required this.riskScore,
+    required this.fallDetected,
     required this.data,
   });
 }
@@ -32,6 +34,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen>
     with SingleTickerProviderStateMixin {
+  static const String _runtimeBackendUrl = String.fromEnvironment('BACKEND_URL');
   ApiService? _api;
   final FirestoreService _firestoreService = FirestoreService();
   Timer? _timer;
@@ -51,11 +54,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   // Live prediction log (last 10)
   final List<_PredictionLogEntry> _predictionLog = [];
 
-  // Email config
-  String _senderEmail = '';
-  String _password = '';
-  String _receiverEmail = '';
-
   late AnimationController _pulseController;
 
   static const int _maxHistorySize = 50;
@@ -73,10 +71,9 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _loadConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    final serverUrl = prefs.getString('server_url') ?? 'http://localhost:5000';
-    _senderEmail = prefs.getString('sender_email') ?? '';
-    _password = prefs.getString('password') ?? '';
-    _receiverEmail = prefs.getString('receiver_email') ?? '';
+    final serverUrl = _runtimeBackendUrl.isNotEmpty
+        ? _runtimeBackendUrl
+        : (prefs.getString('server_url') ?? 'http://localhost:8000');
     setState(() {
       _api = ApiService(baseUrl: serverUrl);
     });
@@ -109,22 +106,16 @@ class _DashboardScreenState extends State<DashboardScreen>
       // Store in Firestore
       _firestoreService.savePrediction(
         sensorData: data,
-        risk: prediction.risk,
+        riskScore: prediction.risk,
+        fallDetected: prediction.fallDetected,
       );
 
       if (prediction.isHighRisk) {
-        _api!.sendEmailAlert(
-          senderEmail: _senderEmail,
-          password: _password,
-          receiverEmail: _receiverEmail,
-          sensorData: data,
-          risk: prediction.risk,
-        );
-        // Record alert in Firestore
+        // Push notification dispatched server-side via Firebase Cloud Messaging
         _firestoreService.saveAlert(
           sensorData: data,
-          risk: prediction.risk,
-          emailSent: true,
+          riskScore: prediction.risk,
+          fallDetected: prediction.fallDetected,
         );
       }
 
@@ -137,13 +128,14 @@ class _DashboardScreenState extends State<DashboardScreen>
         _chestXHistory.add(data.chestAccX);
         _chestYHistory.add(data.chestAccY);
         _chestZHistory.add(data.chestAccZ);
-        _riskHistory.add(prediction.risk);
+        _riskHistory.add(prediction.riskFlag);
 
         _predictionLog.insert(
           0,
           _PredictionLogEntry(
             timestamp: DateTime.now(),
-            risk: prediction.risk,
+            riskScore: prediction.risk,
+            fallDetected: prediction.fallDetected,
             data: data,
           ),
         );
@@ -338,7 +330,24 @@ class _DashboardScreenState extends State<DashboardScreen>
 
               const SizedBox(height: 20),
 
-              // ── SECTION 3: Insights Panel ──
+              // ── SECTION 3: Prediction Output ──
+              _sectionHeader('PREDICTION OUTPUT', Icons.analytics),
+              const SizedBox(height: 12),
+              _buildVitalCard(
+                label: 'risk_score',
+                displayValue: _currentPrediction!.riskPercent,
+                unit: 'probability',
+                icon: _currentPrediction!.isHighRisk
+                    ? Icons.warning_rounded
+                    : Icons.check_circle_rounded,
+                color: _currentPrediction!.isHighRisk
+                    ? const Color(0xFFFF1744)
+                    : const Color(0xFF00E676),
+                subtitle: _currentPrediction!.label,
+              ),
+              const SizedBox(height: 20),
+
+              // ── SECTION 4: Insights Panel ──
               _sectionHeader('ANALYSIS & INSIGHTS', Icons.insights),
               const SizedBox(height: 12),
               InsightPanel(
@@ -693,7 +702,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       child: Column(
         children: _predictionLog.asMap().entries.map((entry) {
           final log = entry.value;
-          final isRisk = log.risk == 1;
+          final isRisk = log.fallDetected;
           final timeStr =
               '${log.timestamp.hour.toString().padLeft(2, '0')}:'
               '${log.timestamp.minute.toString().padLeft(2, '0')}:'
@@ -751,7 +760,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
                 const Spacer(),
                 Text(
-                  'HR:${log.data.heartRate}',
+                  'R:${(log.riskScore * 100).toStringAsFixed(0)}% HR:${log.data.heartRate}',
                   style: TextStyle(
                     fontSize: 10,
                     color: Colors.grey[500],

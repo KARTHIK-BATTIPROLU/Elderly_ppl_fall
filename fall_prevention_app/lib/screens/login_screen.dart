@@ -10,12 +10,11 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const String _runtimeBackendUrl = String.fromEnvironment('BACKEND_URL');
   final _formKey = GlobalKey<FormState>();
-  final _senderEmailCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController();
-  final _receiverEmailCtrl = TextEditingController();
-  final _serverUrlCtrl = TextEditingController(text: 'http://localhost:5000');
-  bool _obscurePassword = true;
+  final _serverUrlCtrl = TextEditingController(
+    text: _runtimeBackendUrl.isNotEmpty ? _runtimeBackendUrl : 'http://localhost:8000',
+  );
 
   @override
   void initState() {
@@ -25,12 +24,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _loadSavedConfig() async {
     final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('server_url');
+    final resolved = _runtimeBackendUrl.isNotEmpty
+        ? _runtimeBackendUrl
+        : (saved ?? 'http://localhost:8000');
     setState(() {
-      _senderEmailCtrl.text = prefs.getString('sender_email') ?? '';
-      _passwordCtrl.text = prefs.getString('password') ?? '';
-      _receiverEmailCtrl.text = prefs.getString('receiver_email') ?? '';
-      _serverUrlCtrl.text =
-          prefs.getString('server_url') ?? 'http://localhost:5000';
+      _serverUrlCtrl.text = resolved;
     });
   }
 
@@ -38,9 +37,6 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('sender_email', _senderEmailCtrl.text.trim());
-    await prefs.setString('password', _passwordCtrl.text);
-    await prefs.setString('receiver_email', _receiverEmailCtrl.text.trim());
     await prefs.setString('server_url', _serverUrlCtrl.text.trim());
 
     if (!mounted) return;
@@ -52,9 +48,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _senderEmailCtrl.dispose();
-    _passwordCtrl.dispose();
-    _receiverEmailCtrl.dispose();
     _serverUrlCtrl.dispose();
     super.dispose();
   }
@@ -92,7 +85,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Configure alert settings to start monitoring',
+                    'Configure server settings to start monitoring',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.8),
                       fontSize: 14,
@@ -112,7 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             const Text(
-                              'Email Alert Configuration',
+                              'Server Configuration',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
@@ -128,54 +121,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                               validator: (v) => v == null || v.trim().isEmpty
                                   ? 'Enter server URL'
-                                  : null,
-                            ),
-                            const SizedBox(height: 16),
-                            TextFormField(
-                              controller: _senderEmailCtrl,
-                              keyboardType: TextInputType.emailAddress,
-                              decoration: _inputDecor(
-                                'Sender Email',
-                                Icons.email_outlined,
-                              ),
-                              validator: (v) => v == null || !v.contains('@')
-                                  ? 'Enter valid email'
-                                  : null,
-                            ),
-                            const SizedBox(height: 16),
-                            TextFormField(
-                              controller: _passwordCtrl,
-                              obscureText: _obscurePassword,
-                              decoration: _inputDecor(
-                                'App Password',
-                                Icons.lock_outlined,
-                              ).copyWith(
-                                suffixIcon: IconButton(
-                                  icon: Icon(
-                                    _obscurePassword
-                                        ? Icons.visibility_off
-                                        : Icons.visibility,
-                                    size: 20,
-                                  ),
-                                  onPressed: () => setState(
-                                    () => _obscurePassword = !_obscurePassword,
-                                  ),
-                                ),
-                              ),
-                              validator: (v) => v == null || v.isEmpty
-                                  ? 'Enter app password'
-                                  : null,
-                            ),
-                            const SizedBox(height: 16),
-                            TextFormField(
-                              controller: _receiverEmailCtrl,
-                              keyboardType: TextInputType.emailAddress,
-                              decoration: _inputDecor(
-                                'Receiver Email (Caregiver)',
-                                Icons.people_outline,
-                              ),
-                              validator: (v) => v == null || !v.contains('@')
-                                  ? 'Enter valid email'
                                   : null,
                             ),
                             const SizedBox(height: 28),

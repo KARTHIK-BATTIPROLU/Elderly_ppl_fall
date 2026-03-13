@@ -14,6 +14,7 @@ class AnalyticsScreen extends StatefulWidget {
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
+  static const String _runtimeBackendUrl = String.fromEnvironment('BACKEND_URL');
   ApiService? _api;
   final FirestoreService _firestoreService = FirestoreService();
   Timer? _timer;
@@ -45,7 +46,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   Future<void> _initApi() async {
     final prefs = await SharedPreferences.getInstance();
-    final serverUrl = prefs.getString('server_url') ?? 'http://localhost:5000';
+    final serverUrl = _runtimeBackendUrl.isNotEmpty
+        ? _runtimeBackendUrl
+        : (prefs.getString('server_url') ?? 'http://localhost:8000');
     setState(() {
       _api = ApiService(baseUrl: serverUrl);
     });
@@ -104,7 +107,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         _error = null;
         _fetchCount++;
         _lastData = data;
-        _lastRisk = prediction.risk;
+        _lastRisk = prediction.riskFlag;
 
         _heartRates.add(data.heartRate);
         _chestX.add(data.chestAccX);
@@ -113,7 +116,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         _wristX.add(data.wristAccX);
         _wristY.add(data.wristAccY);
         _wristZ.add(data.wristAccZ);
-        _risks.add(prediction.risk);
+        _risks.add(prediction.riskFlag);
         _postures.add(data.bodyPosture);
 
         // Trim
