@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sensor_data.dart';
 import '../services/api_service.dart';
@@ -48,12 +49,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final prefs = await SharedPreferences.getInstance();
     final serverUrl = _runtimeBackendUrl.isNotEmpty
         ? _runtimeBackendUrl
-        : (prefs.getString('server_url') ?? 'http://localhost:8000');
+        : (prefs.getString('server_url') ?? 'http://192.168.0.4:8001');
     setState(() {
       _api = ApiService(baseUrl: serverUrl);
     });
     await _loadFirestoreHistory();
-    _startLiveFeed();
+    await _startLiveFeed();
   }
 
   Future<void> _loadFirestoreHistory() async {
@@ -81,8 +82,20 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     }
   }
 
-  void _startLiveFeed() {
+  Future<void> _startLiveFeed() async {
     if (_api == null) return;
+    final reachable = await _api!.checkBackendHealth();
+    if (!reachable) {
+      if (kDebugMode) {
+        debugPrint('Failed to connect to backend');
+      }
+      setState(() {
+        _error = 'Backend server not reachable.';
+        _isLive = false;
+      });
+      return;
+    }
+
     setState(() {
       _isLive = true;
       _error = null;
@@ -134,6 +147,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       });
     } catch (e) {
       if (!mounted) return;
+      if (kDebugMode) {
+        debugPrint('Failed to connect to backend: $e');
+      }
       setState(() => _error = 'Backend server not reachable.');
     }
   }

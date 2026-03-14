@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sensor_data.dart';
 import '../models/prediction.dart';
@@ -73,13 +74,26 @@ class _DashboardScreenState extends State<DashboardScreen>
     final prefs = await SharedPreferences.getInstance();
     final serverUrl = _runtimeBackendUrl.isNotEmpty
         ? _runtimeBackendUrl
-        : (prefs.getString('server_url') ?? 'http://localhost:8000');
+        : (prefs.getString('server_url') ?? 'http://192.168.0.4:8001');
     setState(() {
       _api = ApiService(baseUrl: serverUrl);
     });
   }
 
-  void _startMonitoring() {
+  Future<void> _startMonitoring() async {
+    if (_api == null) return;
+    final reachable = await _api!.checkBackendHealth();
+    if (!reachable) {
+      if (kDebugMode) {
+        debugPrint('Failed to connect to backend');
+      }
+      setState(() {
+        _error = 'Backend server not reachable.';
+        _isMonitoring = false;
+      });
+      return;
+    }
+
     setState(() {
       _isMonitoring = true;
       _error = null;
@@ -152,6 +166,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         }
       });
     } catch (e) {
+      if (kDebugMode) {
+        debugPrint('Failed to connect to backend: $e');
+      }
       setState(() => _error = 'Backend server not reachable.');
     }
   }

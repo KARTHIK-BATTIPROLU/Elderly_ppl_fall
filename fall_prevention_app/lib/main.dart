@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
@@ -16,11 +15,11 @@ void main() async {
   final authService = AuthService();
   final notificationService = NotificationService();
 
-  final credential = await FirebaseAuth.instance.signInAnonymously();
+  final user = await authService.signInAnonymously();
   if (kDebugMode) {
-    print('Authenticated UID: ${credential.user?.uid}');
+    print('Authenticated UID: ${user?.uid}');
   }
-  await authService.signInAnonymously();
+
   await notificationService.initialize();
   notificationService.listenForTokenRefresh(authService);
 
@@ -30,7 +29,7 @@ void main() async {
       await authService.updateDeviceToken(token);
     }
     if (kDebugMode) {
-      print('FCM Token: $token');
+      print('FCM TOKEN: $token');
     }
   } catch (e) {
     if (kDebugMode) {

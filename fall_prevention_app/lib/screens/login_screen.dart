@@ -13,7 +13,7 @@ class _LoginScreenState extends State<LoginScreen> {
   static const String _runtimeBackendUrl = String.fromEnvironment('BACKEND_URL');
   final _formKey = GlobalKey<FormState>();
   final _serverUrlCtrl = TextEditingController(
-    text: _runtimeBackendUrl.isNotEmpty ? _runtimeBackendUrl : 'http://localhost:8000',
+    text: _runtimeBackendUrl.isNotEmpty ? _runtimeBackendUrl : 'http://192.168.0.4:8001',
   );
 
   @override
@@ -27,7 +27,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final saved = prefs.getString('server_url');
     final resolved = _runtimeBackendUrl.isNotEmpty
         ? _runtimeBackendUrl
-        : (saved ?? 'http://localhost:8000');
+        : (saved ?? 'http://192.168.0.4:8001');
     setState(() {
       _serverUrlCtrl.text = resolved;
     });
