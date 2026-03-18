@@ -39,13 +39,18 @@ class FirestoreService {
     required SensorData sensorData,
     required double riskScore,
     required bool fallDetected,
+    required bool notificationSent,
+    required int notificationSentCount,
+    required int notificationTargetCount,
   }) async {
     await _db.collection(_alerts).add({
       'sensor_data': sensorData.toJson(),
       'risk': fallDetected ? 1 : 0,
       'risk_score': riskScore,
       'fall_detected': fallDetected,
-      'notification_sent': true,
+      'notification_sent': notificationSent,
+      'notification_sent_count': notificationSentCount,
+      'notification_target_count': notificationTargetCount,
       'timestamp': FieldValue.serverTimestamp(),
     });
   }

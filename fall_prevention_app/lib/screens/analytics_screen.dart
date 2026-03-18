@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sensor_data.dart';
 import '../services/api_service.dart';
+import '../services/backend_config.dart';
 import '../services/firestore_service.dart';
 import '../widgets/charts.dart';
 
@@ -15,11 +16,13 @@ class AnalyticsScreen extends StatefulWidget {
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
-  static const String _runtimeBackendUrl = String.fromEnvironment('BACKEND_URL');
   ApiService? _api;
   final FirestoreService _firestoreService = FirestoreService();
-  Timer? _timer;
+  Timer? _feedTimer;
+  Timer? _healthTimer;
   bool _isLive = false;
+  bool _backendReachable = false;
+  bool _fetchInProgress = false;
   String? _error;
   int _fetchCount = 0;
 
@@ -47,13 +50,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   Future<void> _initApi() async {
     final prefs = await SharedPreferences.getInstance();
-    final serverUrl = _runtimeBackendUrl.isNotEmpty
-        ? _runtimeBackendUrl
-        : (prefs.getString('server_url') ?? 'http://192.168.0.4:8001');
+    if (!mounted) return;
+
+    final serverUrl = resolveBackendUrl(prefs.getString('server_url'));
+
+    if (kDebugMode) {
+      debugPrint('[API] Analytics using backend: $serverUrl');
+    }
+
     setState(() {
       _api = ApiService(baseUrl: serverUrl);
     });
+
     await _loadFirestoreHistory();
+    if (!mounted) return;
+
     await _startLiveFeed();
   }
 
@@ -84,33 +95,74 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   Future<void> _startLiveFeed() async {
     if (_api == null) return;
+
+    _stopTimers();
+
     final reachable = await _api!.checkBackendHealth();
+    if (!mounted) return;
+
     if (!reachable) {
       if (kDebugMode) {
-        debugPrint('Failed to connect to backend');
+        debugPrint('[ERROR] Failed to connect to backend from AnalyticsScreen');
       }
       setState(() {
         _error = 'Backend server not reachable.';
         _isLive = false;
+        _backendReachable = false;
       });
+
+      _startHealthMonitor();
       return;
     }
 
     setState(() {
       _isLive = true;
+      _backendReachable = true;
       _error = null;
     });
-    _fetchCycle();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _fetchCycle());
+
+    _startHealthMonitor();
+    unawaited(_fetchCycle());
+    _feedTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_fetchCycle());
+    });
   }
 
   void _stopLiveFeed() {
-    _timer?.cancel();
+    _stopTimers();
+    if (!mounted) return;
     setState(() => _isLive = false);
   }
 
+  void _startHealthMonitor() {
+    _healthTimer?.cancel();
+    _healthTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      if (_api == null || !mounted) return;
+      final reachable = await _api!.checkBackendHealth();
+      if (!mounted) return;
+
+      if (_backendReachable != reachable) {
+        setState(() {
+          _backendReachable = reachable;
+          if (reachable) {
+            _error = null;
+          } else {
+            _error = 'Backend server not reachable.';
+          }
+        });
+      }
+    });
+  }
+
+  void _stopTimers() {
+    _feedTimer?.cancel();
+    _healthTimer?.cancel();
+  }
+
   Future<void> _fetchCycle() async {
-    if (_api == null) return;
+    if (_api == null || _fetchInProgress) return;
+
+    _fetchInProgress = true;
     try {
       final data = await _api!.fetchRandomData();
       final prediction = await _api!.predictFallRisk(data);
@@ -118,6 +170,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       if (!mounted) return;
       setState(() {
         _error = null;
+        _backendReachable = true;
         _fetchCount++;
         _lastData = data;
         _lastRisk = prediction.riskFlag;
@@ -148,15 +201,20 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     } catch (e) {
       if (!mounted) return;
       if (kDebugMode) {
-        debugPrint('Failed to connect to backend: $e');
+        debugPrint('[ERROR] Failed to connect to backend: $e');
       }
-      setState(() => _error = 'Backend server not reachable.');
+      setState(() {
+        _error = 'Backend server not reachable.';
+        _backendReachable = false;
+      });
+    } finally {
+      _fetchInProgress = false;
     }
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _stopTimers();
     super.dispose();
   }
 
@@ -331,20 +389,22 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   }
 
   Widget _buildLiveStatusBar() {
+    final showConnected = _isLive && _backendReachable;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
         gradient: LinearGradient(
-          colors: _isLive
+          colors: showConnected
               ? [const Color(0xFF0D47A1), const Color(0xFF1976D2)]
-              : [Colors.grey[400]!, Colors.grey[500]!],
+              : [Colors.red[400]!, Colors.red[600]!],
         ),
       ),
       child: Row(
         children: [
           Icon(
-            _isLive ? Icons.sensors : Icons.sensors_off,
+            showConnected ? Icons.cloud_done : Icons.cloud_off,
             color: Colors.white,
             size: 22,
           ),
@@ -354,9 +414,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _isLive
-                      ? 'Fetching live data every 5 seconds'
-                      : 'Live feed paused',
+                  showConnected
+                      ? 'Connected to backend • polling every 5s'
+                      : 'Backend unreachable or live feed paused',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,

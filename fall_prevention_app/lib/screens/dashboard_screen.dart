@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sensor_data.dart';
 import '../models/prediction.dart';
 import '../services/api_service.dart';
+import '../services/backend_config.dart';
 import '../services/firestore_service.dart';
 import '../widgets/sensor_card.dart';
 import '../widgets/risk_indicator.dart';
@@ -35,7 +36,6 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen>
     with SingleTickerProviderStateMixin {
-  static const String _runtimeBackendUrl = String.fromEnvironment('BACKEND_URL');
   ApiService? _api;
   final FirestoreService _firestoreService = FirestoreService();
   Timer? _timer;
@@ -72,9 +72,8 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _loadConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    final serverUrl = _runtimeBackendUrl.isNotEmpty
-        ? _runtimeBackendUrl
-        : (prefs.getString('server_url') ?? 'http://192.168.0.4:8001');
+    final serverUrl = resolveBackendUrl(prefs.getString('server_url'));
+    if (!mounted) return;
     setState(() {
       _api = ApiService(baseUrl: serverUrl);
     });
@@ -83,6 +82,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Future<void> _startMonitoring() async {
     if (_api == null) return;
     final reachable = await _api!.checkBackendHealth();
+    if (!mounted) return;
     if (!reachable) {
       if (kDebugMode) {
         debugPrint('Failed to connect to backend');
@@ -118,7 +118,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       final prediction = await _api!.predictFallRisk(data);
 
       // Store in Firestore
-      _firestoreService.savePrediction(
+      await _firestoreService.savePrediction(
         sensorData: data,
         riskScore: prediction.risk,
         fallDetected: prediction.fallDetected,
@@ -126,13 +126,17 @@ class _DashboardScreenState extends State<DashboardScreen>
 
       if (prediction.isHighRisk) {
         // Push notification dispatched server-side via Firebase Cloud Messaging
-        _firestoreService.saveAlert(
+        await _firestoreService.saveAlert(
           sensorData: data,
           riskScore: prediction.risk,
           fallDetected: prediction.fallDetected,
+          notificationSent: prediction.notificationSentCount > 0,
+          notificationSentCount: prediction.notificationSentCount,
+          notificationTargetCount: prediction.notificationTargetCount,
         );
       }
 
+      if (!mounted) return;
       setState(() {
         _currentData = data;
         _currentPrediction = prediction;
@@ -169,6 +173,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (kDebugMode) {
         debugPrint('Failed to connect to backend: $e');
       }
+      if (!mounted) return;
       setState(() => _error = 'Backend server not reachable.');
     }
   }

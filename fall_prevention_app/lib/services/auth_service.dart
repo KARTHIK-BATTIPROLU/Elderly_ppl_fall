@@ -1,6 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 
 class AuthService {
@@ -12,14 +11,14 @@ class AuthService {
 
   Future<User?> signInAnonymously() async {
     if (_auth.currentUser != null) {
-      _ensureUserDocument(_auth.currentUser!);
+      await _ensureUserDocument(_auth.currentUser!);
       return _auth.currentUser;
     }
 
     final credential = await _auth.signInAnonymously();
     final user = credential.user;
     if (user != null) {
-      _ensureUserDocument(user);
+      await _ensureUserDocument(user);
     }
     return user;
   }
@@ -59,18 +58,10 @@ class AuthService {
 
   /// Create a Firestore user document for a new user.
   Future<void> _createUserDocument(User user) async {
-    String? token;
-    try {
-      token = await _getFcmToken();
-    } catch (e) {
-      if (kDebugMode) print('FCM token retrieval failed: $e');
-    }
-
     try {
       await _db.collection('users').doc(user.uid).set({
         'email': user.email,
         'created_at': FieldValue.serverTimestamp(),
-        'device_token': token,
       });
     } catch (e) {
       if (kDebugMode) print('Firestore user doc create failed: $e');
@@ -79,17 +70,9 @@ class AuthService {
 
   /// Ensure user document exists (for returning users); update token.
   Future<void> _ensureUserDocument(User user) async {
-    String? token;
-    try {
-      token = await _getFcmToken();
-    } catch (e) {
-      if (kDebugMode) print('FCM token retrieval failed: $e');
-    }
-
     try {
       // set+merge avoids an extra read and works whether doc exists or not
       await _db.collection('users').doc(user.uid).set({
-        'device_token': token,
         'last_login': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
@@ -103,16 +86,7 @@ class AuthService {
     if (user == null) return;
     await _db.collection('users').doc(user.uid).set({
       'device_token': token,
+      'token_updated_at': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
-  }
-
-  Future<String?> _getFcmToken() async {
-    if (kIsWeb) {
-      const vapidKey = String.fromEnvironment('FCM_WEB_VAPID_KEY');
-      if (vapidKey.isNotEmpty) {
-        return FirebaseMessaging.instance.getToken(vapidKey: vapidKey);
-      }
-    }
-    return FirebaseMessaging.instance.getToken();
   }
 }

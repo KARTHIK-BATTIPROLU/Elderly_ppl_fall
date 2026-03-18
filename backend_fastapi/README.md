@@ -10,13 +10,13 @@ pip install -r requirements.txt
 ## Configure Firebase Admin credentials
 
 ```powershell
-$env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\service-account.json"
+$env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\serviceAccountKey.json.json"
 ```
 
 ## Run server
 
 ```powershell
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn main:app --host 0.0.0.0 --port 8002 --reload
 ```
 
 ## API endpoints

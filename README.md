@@ -44,7 +44,7 @@ $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\service-account.json"
 
 ```powershell
 cd backend_fastapi
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn main:app --host 0.0.0.0 --port 8002 --reload
 ```
 
 ## Simulation
@@ -82,10 +82,10 @@ flutter run -d chrome --web-port 8090 --dart-define=FCM_WEB_VAPID_KEY=<your-vapi
 
 Set the server URL on the Flutter login/configuration screen to:
 
-- Android emulator: `http://10.0.2.2:8000`
-- Web on the same machine: `http://localhost:8000`
-- Physical Android via USB reverse: `http://127.0.0.1:8000`
-- Physical Android via LAN: `http://<your-pc-ip>:8000`
+- Android emulator: `http://10.0.2.2:8002`
+- Web on the same machine: `http://localhost:8002`
+- Physical Android via USB reverse: `http://127.0.0.1:8002` (only after `adb reverse tcp:8002 tcp:8002`)
+- Physical Android via LAN: `http://<your-pc-ip>:8002`
 
 ## API Endpoints
 

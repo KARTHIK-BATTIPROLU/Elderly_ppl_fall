@@ -5,13 +5,14 @@
 // gestures. You can also use WidgetTester to find child widgets in the widget
 // tree, read text, and verify that the values of widget properties are correct.
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:fall_prevention_app/main.dart';
 
 void main() {
   testWidgets('App renders login screen', (WidgetTester tester) async {
-    await tester.pumpWidget(const FallPreventionApp());
+    await tester.pumpWidget(FallPreventionApp(navigatorKey: GlobalKey<NavigatorState>()));
     expect(find.text('Elder Fall Prevention'), findsOneWidget);
     expect(find.text('Start Monitoring'), findsOneWidget);
   });

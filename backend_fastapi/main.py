@@ -18,10 +18,26 @@ from pydantic import BaseModel, Field
 ROOT_DIR = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT_DIR / "model" / "rf_model.pkl"
 REALTIME_DATA_PATH = ROOT_DIR / "data" / "realtime_data.csv"
-SERVICE_ACCOUNT_KEY_PATH = Path(
-    os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_PATH", ROOT_DIR / "serviceAccountKey.json")
-)
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "fall-prevention-sys-26")
+
+
+def _resolve_service_account_key_path() -> Path:
+    configured_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_PATH")
+    if configured_path:
+        return Path(configured_path)
+
+    candidates = [
+        ROOT_DIR / "serviceAccountKey.json",
+        ROOT_DIR / "serviceAccountKey.json.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
+
+
+SERVICE_ACCOUNT_KEY_PATH = _resolve_service_account_key_path()
 
 FEATURES_ORDER = [
     "chest_acc_x",
@@ -57,13 +73,28 @@ def initialize_firebase_admin() -> None:
         print("Initialized Firebase Admin with application default credentials")
     except DefaultCredentialsError:
         firebase_admin.initialize_app(options=app_options)
-        print("Initialized Firebase Admin with project ID only")
+        print(
+            "WARNING: Firebase Admin initialized WITHOUT credentials. "
+            "FCM push notifications will NOT work.\n"
+            "  Fix: download serviceAccountKey.json from Firebase Console → "
+            "Project Settings → Service Accounts → Generate new private key, "
+            "then place it in the project root."
+        )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(f"Model file not found at: {MODEL_PATH}")
+    print(f"Loading model from: {MODEL_PATH}")
     app.state.model = joblib.load(MODEL_PATH)
+    print("Model loaded successfully")
+
+    if not REALTIME_DATA_PATH.exists():
+        print(f"WARNING: Realtime data file not found at: {REALTIME_DATA_PATH}")
+
     initialize_firebase_admin()
+    print("Backend startup complete")
     yield
 
 
@@ -82,6 +113,9 @@ class PredictResponse(BaseModel):
     risk: float
     risk_score: float
     fall_detected: bool
+    notification_attempted: bool = False
+    notification_sent_count: int = 0
+    notification_target_count: int = 0
 
 
 app = FastAPI(
@@ -97,7 +131,7 @@ allow_all_origins = allowed_origins == ["*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -136,14 +170,21 @@ def predict(
 
     probability = float(app.state.model.predict_proba(features_df)[0][1])
     fall_detected = probability >= RISK_THRESHOLD
+    notification_sent_count = 0
+    notification_target_count = 0
 
     if fall_detected:
-        send_high_risk_push_to_all(feature_map, probability)
+        notification_sent_count, notification_target_count = send_high_risk_push_to_all(
+            feature_map, probability
+        )
 
     return PredictResponse(
         risk=round(probability, 4),
         risk_score=round(probability, 4),
         fall_detected=fall_detected,
+        notification_attempted=fall_detected,
+        notification_sent_count=notification_sent_count,
+        notification_target_count=notification_target_count,
     )
 
 
@@ -182,7 +223,9 @@ def load_random_sample() -> dict[str, Any]:
     return random.choice(rows)
 
 
-def send_high_risk_push_to_all(feature_map: dict[str, float | int], probability: float) -> None:
+def send_high_risk_push_to_all(
+    feature_map: dict[str, float | int], probability: float
+) -> tuple[int, int]:
     try:
         db = firestore.client()
         docs = db.collection("users").stream()
@@ -194,26 +237,45 @@ def send_high_risk_push_to_all(feature_map: dict[str, float | int], probability:
 
         if not tokens:
             print("No device tokens available for high-risk notification")
-            return
+            return 0, 0
 
-        for token in set(tokens):
-            message = messaging.Message(
-                notification=messaging.Notification(
-                    title="Fall Detected",
-                    body="High fall risk detected",
-                ),
-                data={
-                    "type": "fall_risk",
-                    "risk": f"{probability:.4f}",
-                    "heart_rate": str(feature_map.get("heart_rate", "")),
-                    "body_posture": str(feature_map.get("body_posture", "")),
-                },
-                token=token,
-                android=messaging.AndroidConfig(
-                    priority="high",
-                    notification=messaging.AndroidNotification(channel_id="fall_risk_alerts"),
-                ),
-            )
-            messaging.send(message)
+        sent = 0
+        unique_tokens = set(tokens)
+        for token in unique_tokens:
+            try:
+                message = messaging.Message(
+                    notification=messaging.Notification(
+                        title="Fall Detected",
+                        body="High fall risk detected",
+                    ),
+                    data={
+                        "type": "fall_risk",
+                        "risk": f"{probability:.4f}",
+                        "heart_rate": str(feature_map.get("heart_rate", "")),
+                        "body_posture": str(feature_map.get("body_posture", "")),
+                    },
+                    token=token,
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        notification=messaging.AndroidNotification(
+                            channel_id="fall_risk_alerts"
+                        ),
+                    ),
+                    webpush=messaging.WebpushConfig(
+                        notification=messaging.WebpushNotification(
+                            title="Fall Detected",
+                            body="High fall risk detected",
+                            icon="/icons/Icon-192.png",
+                        ),
+                    ),
+                )
+                messaging.send(message)
+                sent += 1
+                print(f"FCM sent to ...{token[-8:]}")
+            except Exception as token_exc:
+                print(f"FCM token error (...{token[-8:]}): {token_exc}")
+        print(f"FCM dispatch complete: {sent}/{len(unique_tokens)} tokens notified")
+        return sent, len(unique_tokens)
     except Exception as exc:
         print(f"FCM dispatch error: {exc}")
+        return 0, 0

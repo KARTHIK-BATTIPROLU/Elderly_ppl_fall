@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/backend_config.dart';
 import 'dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -10,11 +11,8 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  static const String _runtimeBackendUrl = String.fromEnvironment('BACKEND_URL');
   final _formKey = GlobalKey<FormState>();
-  final _serverUrlCtrl = TextEditingController(
-    text: _runtimeBackendUrl.isNotEmpty ? _runtimeBackendUrl : 'http://192.168.0.4:8001',
-  );
+  final _serverUrlCtrl = TextEditingController(text: resolveBackendUrl(null));
 
   @override
   void initState() {
@@ -25,9 +23,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _loadSavedConfig() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('server_url');
-    final resolved = _runtimeBackendUrl.isNotEmpty
-        ? _runtimeBackendUrl
-        : (saved ?? 'http://192.168.0.4:8001');
+    final resolved = resolveBackendUrl(saved);
+    if (!mounted) return;
     setState(() {
       _serverUrlCtrl.text = resolved;
     });

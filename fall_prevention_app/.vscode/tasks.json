@@ -8,8 +8,7 @@
 			"args": [
 				"run",
 				"-d",
-				"ZD222QLRV7",
-				"--dart-define=BACKEND_URL=http://127.0.0.1:8000"
+				"ZD222QLRV7"
 			],
 			"isBackground": true,
 			"group": "build"
@@ -21,8 +20,7 @@
 			"args": [
 				"run",
 				"-d",
-				"ZD222QLRV7",
-				"--dart-define=BACKEND_URL=http://127.0.0.1:8000"
+				"ZD222QLRV7"
 			],
 			"isBackground": true,
 			"group": "build"
