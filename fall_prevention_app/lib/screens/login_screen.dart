@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../services/backend_config.dart';
-import 'dashboard_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../services/auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -11,42 +10,111 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  final _authService = AuthService();
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  final _serverUrlCtrl = TextEditingController(text: resolveBackendUrl(null));
 
-  @override
-  void initState() {
-    super.initState();
-    _loadSavedConfig();
-  }
-
-  Future<void> _loadSavedConfig() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString('server_url');
-    final resolved = resolveBackendUrl(saved);
-    if (!mounted) return;
-    setState(() {
-      _serverUrlCtrl.text = resolved;
-    });
-  }
-
-  Future<void> _saveAndNavigate() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('server_url', _serverUrlCtrl.text.trim());
-
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-    );
-  }
+  bool _isLoading = false;
+  bool _isSignUp = false;
+  String? _errorMessage;
 
   @override
   void dispose() {
-    _serverUrlCtrl.dispose();
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleLogin() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await _authService.login(
+        email: _emailCtrl.text.trim(),
+        password: _passwordCtrl.text,
+      );
+      // Navigation handled by AuthWrapper StreamBuilder
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    } on FirebaseAuthException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = _getUserFriendlyErrorMessage(e.code);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Login failed. Please try again.';
+        });
+      }
+    }
+  }
+
+  Future<void> _handleSignUp() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await _authService.signUp(
+        email: _emailCtrl.text.trim(),
+        password: _passwordCtrl.text,
+      );
+      // Navigation handled by AuthWrapper StreamBuilder
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    } on FirebaseAuthException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = _getUserFriendlyErrorMessage(e.code);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Sign up failed. Please try again.';
+        });
+      }
+    }
+  }
+
+  String _getUserFriendlyErrorMessage(String code) {
+    switch (code) {
+      case 'user-not-found':
+        return 'No account found with this email.';
+      case 'wrong-password':
+        return 'Incorrect password.';
+      case 'invalid-email':
+        return 'Invalid email format.';
+      case 'user-disabled':
+        return 'This account has been disabled.';
+      case 'email-already-in-use':
+        return 'Email is already registered.';
+      case 'operation-not-allowed':
+        return 'Email/password authentication is not enabled.';
+      case 'weak-password':
+        return 'Password is too weak. Use at least 6 characters.';
+      case 'network-request-failed':
+        return 'Network error. Check your connection.';
+      default:
+        return 'Authentication error: $code';
+    }
   }
 
   @override
@@ -82,7 +150,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Configure server settings to start monitoring',
+                    _isSignUp ? 'Create your account' : 'Sign in to continue',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.8),
                       fontSize: 14,
@@ -101,28 +169,75 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            const Text(
-                              'Server Configuration',
-                              style: TextStyle(
+                            Text(
+                              _isSignUp ? 'Sign Up' : 'Login',
+                              style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
                               ),
                               textAlign: TextAlign.center,
                             ),
-                            const SizedBox(height: 24),
-                            TextFormField(
-                              controller: _serverUrlCtrl,
-                              decoration: _inputDecor(
-                                'Backend Server URL',
-                                Icons.dns_outlined,
+                            const SizedBox(height: 20),
+                            if (_errorMessage != null) ...[
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  border: Border.all(color: Colors.red.shade300),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  _errorMessage!,
+                                  style: TextStyle(
+                                    color: Colors.red.shade700,
+                                    fontSize: 13,
+                                  ),
+                                ),
                               ),
-                              validator: (v) => v == null || v.trim().isEmpty
-                                  ? 'Enter server URL'
-                                  : null,
+                              const SizedBox(height: 16),
+                            ],
+                            TextFormField(
+                              controller: _emailCtrl,
+                              decoration: _inputDecor(
+                                'Email Address',
+                                Icons.email_outlined,
+                              ),
+                              keyboardType: TextInputType.emailAddress,
+                              validator: (v) {
+                                if (v == null || v.trim().isEmpty) {
+                                  return 'Email is required';
+                                }
+                                if (!v.contains('@')) {
+                                  return 'Enter a valid email';
+                                }
+                                return null;
+                              },
+                              enabled: !_isLoading,
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: _passwordCtrl,
+                              decoration: _inputDecor(
+                                _isSignUp ? 'Create Password' : 'Password',
+                                Icons.lock_outline,
+                              ),
+                              obscureText: true,
+                              validator: (v) {
+                                if (v == null || v.isEmpty) {
+                                  return 'Password is required';
+                                }
+                                if (v.length < 6) {
+                                  return 'Password must be at least 6 characters';
+                                }
+                                return null;
+                              },
+                              enabled: !_isLoading,
                             ),
                             const SizedBox(height: 28),
                             ElevatedButton(
-                              onPressed: _saveAndNavigate,
+                              onPressed: _isLoading
+                                  ? null
+                                  : (_isSignUp ? _handleSignUp : _handleLogin),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF1565C0),
                                 foregroundColor: Colors.white,
@@ -133,19 +248,50 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 elevation: 2,
                               ),
-                              child: const Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.monitor_heart, size: 20),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    'Start Monitoring',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
+                              child: _isLoading
+                                  ? const SizedBox(
+                                      height: 20,
+                                      width: 20,
+                                      child: CircularProgressIndicator(
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                          Colors.white,
+                                        ),
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          _isSignUp ? Icons.person_add : Icons.login,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          _isSignUp ? 'Create Account' : 'Sign In',
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ),
-                                ],
+                            ),
+                            const SizedBox(height: 16),
+                            TextButton(
+                              onPressed:
+                                  _isLoading ? null : _toggleAuthMode,
+                              child: Text(
+                                _isSignUp
+                                    ? 'Already have an account? Sign In'
+                                    : 'Don\'t have an account? Sign Up',
+                                style: const TextStyle(
+                                  color: Color(0xFF1565C0),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
                           ],
@@ -160,6 +306,15 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ),
     );
+  }
+
+  void _toggleAuthMode() {
+    setState(() {
+      _isSignUp = !_isSignUp;
+      _errorMessage = null;
+      _emailCtrl.clear();
+      _passwordCtrl.clear();
+    });
   }
 
   InputDecoration _inputDecor(String label, IconData icon) {

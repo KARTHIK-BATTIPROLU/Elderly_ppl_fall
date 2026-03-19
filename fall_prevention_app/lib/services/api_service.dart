@@ -66,10 +66,15 @@ class ApiService {
     );
   }
 
-  Future<PredictionResult> predictFallRisk(SensorData data) async {
+  Future<PredictionResult> predictFallRisk(SensorData data, {String? uid}) async {
     final uri = Uri.parse('$baseUrl/predict');
     _log('POST $uri');
     final headers = await _authHeaders();
+
+    final body = data.toJson();
+    if (uid != null) {
+      body['uid'] = uid;
+    }
 
     final response = await _requestWithRetry(
       requestLabel: 'POST /predict',
@@ -78,7 +83,7 @@ class ApiService {
       makeRequest: () => _client.post(
         uri,
         headers: headers,
-        body: jsonEncode(data.toJson()),
+        body: jsonEncode(body),
       ),
     );
 

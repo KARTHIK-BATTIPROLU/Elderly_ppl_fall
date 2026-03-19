@@ -1,9 +1,11 @@
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show Platform;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'auth_service.dart';
 
 /// Top-level background handler — must be a top-level function.
 @pragma('vm:entry-point')
@@ -19,6 +21,7 @@ class NotificationService {
   NotificationService._();
 
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
 
@@ -34,7 +37,7 @@ class NotificationService {
     'fall_risk_alerts',
     'Fall Risk Alerts',
     description: 'High-priority notifications for fall risk detection',
-    importance: Importance.high,
+    importance: Importance.max,
   );
 
   /// Initialize FCM + local notifications. Call once after Firebase.initializeApp().
@@ -92,6 +95,15 @@ class NotificationService {
       _handleNotificationOpen(initialMessage);
     }
 
+    // Set up token refresh listener
+    _onTokenRefreshSub = _messaging.onTokenRefresh.listen((newToken) {
+      _log('FCM token refreshed: $newToken');
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        saveTokenToFirestore(user.uid, newToken);
+      }
+    });
+
     _initialized = true;
     _log('NotificationService initialization complete.');
   }
@@ -100,19 +112,18 @@ class NotificationService {
   Future<String?> getToken() async {
     try {
       _log('Requesting FCM token. isWeb=$kIsWeb');
+      String? token;
       if (kIsWeb) {
         const vapidKey = String.fromEnvironment('FCM_WEB_VAPID_KEY');
-        if (vapidKey.isEmpty) {
-          _error('Missing FCM_WEB_VAPID_KEY on web; token retrieval may fail.');
-        }
         if (vapidKey.isNotEmpty) {
-          final webToken = await _messaging.getToken(vapidKey: vapidKey);
-          _log('Web FCM token generated: ${webToken != null && webToken.isNotEmpty}');
-          return webToken;
+           token = await _messaging.getToken(vapidKey: vapidKey);
+        } else {
+           token = await _messaging.getToken();
         }
+      } else {
+        token = await _messaging.getToken();
       }
-
-      final token = await _messaging.getToken();
+      
       _log('FCM token generated: ${token != null && token.isNotEmpty}');
       return token;
     } catch (e) {
@@ -121,13 +132,48 @@ class NotificationService {
     }
   }
 
-  /// Listen for token refreshes and update Firestore.
-  void listenForTokenRefresh(AuthService authService) {
-    _onTokenRefreshSub?.cancel();
-    _onTokenRefreshSub = _messaging.onTokenRefresh.listen((newToken) async {
-      _log('FCM token refreshed; updating backend token store.');
-      await authService.updateDeviceToken(newToken);
-    });
+  /// Save FCM token to Firestore under users/{uid}/tokens/{token}
+  Future<void> saveTokenToFirestore(String uid, [String? specificToken]) async {
+    try {
+      final token = specificToken ?? await getToken();
+      if (token == null) return;
+
+      final tokenRef = _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc(token);
+
+      await tokenRef.set({
+        'token': token,
+        'created_at': FieldValue.serverTimestamp(),
+        'updated_at': FieldValue.serverTimestamp(),
+        'platform': kIsWeb ? 'web' : (Platform.isAndroid ? 'android' : 'ios'),
+      });
+
+      _log('Token saved to Firestore for user: $uid');
+    } catch (e) {
+      _error('Failed to save token to Firestore: $e');
+    }
+  }
+
+  /// Remove FCM token from Firestore (e.g. on logout)
+  Future<void> removeTokenFromFirestore(String uid) async {
+    try {
+      final token = await getToken();
+      if (token == null) return;
+
+      final tokenRef = _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc(token);
+
+      await tokenRef.delete();
+      _log('Token removed from Firestore for user: $uid');
+    } catch (e) {
+      _error('Failed to remove token from Firestore: $e');
+    }
   }
 
   /// Show a foreground notification using flutter_local_notifications.
@@ -149,9 +195,11 @@ class NotificationService {
           _androidChannel.id,
           _androidChannel.name,
           channelDescription: _androidChannel.description,
-          importance: Importance.high,
+          importance: Importance.max,
           priority: Priority.max,
           icon: '@mipmap/ic_launcher',
+          playSound: true,
+          enableVibration: true,
         ),
         iOS: const DarwinNotificationDetails(
           presentAlert: true,

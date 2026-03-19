@@ -5,13 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sensor_data.dart';
 import '../models/prediction.dart';
 import '../services/api_service.dart';
+import '../services/auth_service.dart';
 import '../services/backend_config.dart';
 import '../services/firestore_service.dart';
 import '../widgets/sensor_card.dart';
 import '../widgets/risk_indicator.dart';
 import '../widgets/insight_panel.dart';
 import 'analytics_screen.dart';
-import 'login_screen.dart';
 
 class _PredictionLogEntry {
   final DateTime timestamp;
@@ -115,7 +115,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (_api == null) return;
     try {
       final data = await _api!.fetchRandomData();
-      final prediction = await _api!.predictFallRisk(data);
+      final uid = AuthService().currentUser?.uid;
+      final prediction = await _api!.predictFallRisk(data, uid: uid);
 
       // Store in Firestore
       await _firestoreService.savePrediction(
@@ -464,14 +465,12 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         ),
         IconButton(
-          icon: const Icon(Icons.settings_outlined, size: 22),
-          tooltip: 'Settings',
-          onPressed: () {
+          icon: const Icon(Icons.logout_outlined, size: 22),
+          tooltip: 'Logout',
+          onPressed: () async {
             _stopMonitoring();
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const LoginScreen()),
-            );
+            await AuthService().logout();
+            // Navigation handled by AuthWrapper StreamBuilder
           },
         ),
       ],

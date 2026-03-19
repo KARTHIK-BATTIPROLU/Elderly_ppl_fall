@@ -1,6 +1,7 @@
 import csv
 import os
 import random
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,12 @@ FEATURES_ORDER = [
 ]
 
 RISK_THRESHOLD = float(os.getenv("RISK_THRESHOLD", "0.40"))
+NOTIFICATION_COOLDOWN_SECONDS = int(
+    os.getenv("NOTIFICATION_COOLDOWN_SECONDS", "30")
+)
+
+# Global cooldown guard per user
+_last_push_sent_at: dict[str, float] = {}
 
 
 def initialize_firebase_admin() -> None:
@@ -107,6 +114,7 @@ class PredictRequest(BaseModel):
     wrist_acc_z: float = Field(..., description="Wrist accelerometer Z")
     heart_rate: int = Field(..., ge=0, description="Heart rate in BPM")
     body_posture: int = Field(..., ge=0, le=4, description="Encoded posture class")
+    uid: str | None = Field(None, description="User ID for targeted notification")
 
 
 class PredictResponse(BaseModel):
@@ -164,7 +172,7 @@ def random_data() -> dict[str, Any]:
 def predict(
     payload: PredictRequest,
 ):
-    print("Prediction request received")
+    print(f"Prediction request received. UID={payload.uid}")
     feature_map = payload.model_dump()
     features_df = pd.DataFrame([feature_map], columns=FEATURES_ORDER)
 
@@ -173,10 +181,12 @@ def predict(
     notification_sent_count = 0
     notification_target_count = 0
 
-    if fall_detected:
-        notification_sent_count, notification_target_count = send_high_risk_push_to_all(
-            feature_map, probability
+    if fall_detected and payload.uid:
+        notification_sent_count, notification_target_count = send_notification_to_user(
+            payload.uid, feature_map, probability
         )
+    elif fall_detected:
+        print("Fall detected but no UID provided; skipping notification.")
 
     return PredictResponse(
         risk=round(probability, 4),
@@ -223,57 +233,106 @@ def load_random_sample() -> dict[str, Any]:
     return random.choice(rows)
 
 
-def send_high_risk_push_to_all(
-    feature_map: dict[str, float | int], probability: float
+def send_notification_to_user(
+    uid: str, feature_map: dict[str, Any], probability: float
 ) -> tuple[int, int]:
+    global _last_push_sent_at
+
+    now = time.time()
+    last_sent = _last_push_sent_at.get(uid, 0.0)
+    
+    if (now - last_sent) < NOTIFICATION_COOLDOWN_SECONDS:
+        print(
+            f"FCM skipped for {uid}: cooldown active "
+            f"({NOTIFICATION_COOLDOWN_SECONDS}s)"
+        )
+        return 0, 0
+    
+    _last_push_sent_at[uid] = now
+
     try:
         db = firestore.client()
-        docs = db.collection("users").stream()
+        # Query the tokens subcollection for the specific user
+        docs = db.collection("users").document(uid).collection("tokens").stream()
+        
         tokens: list[str] = []
+        token_refs: list[str] = [] # To keep track for deletion if needed
+        
         for doc in docs:
-            token = (doc.to_dict() or {}).get("device_token")
-            if isinstance(token, str) and token.strip():
-                tokens.append(token.strip())
+            data = doc.to_dict() or {}
+            token_val = data.get("token")
+            # If doc.id is the token, we can use that too, but we check the field
+            if isinstance(token_val, str) and token_val.strip():
+                tokens.append(token_val.strip())
+                token_refs.append(token_val.strip()) # Assuming doc ID is token per requirement
 
         if not tokens:
-            print("No device tokens available for high-risk notification")
+            print(f"No device tokens available for user {uid}")
             return 0, 0
 
-        sent = 0
-        unique_tokens = set(tokens)
-        for token in unique_tokens:
-            try:
-                message = messaging.Message(
-                    notification=messaging.Notification(
-                        title="Fall Detected",
-                        body="High fall risk detected",
-                    ),
-                    data={
-                        "type": "fall_risk",
-                        "risk": f"{probability:.4f}",
-                        "heart_rate": str(feature_map.get("heart_rate", "")),
-                        "body_posture": str(feature_map.get("body_posture", "")),
-                    },
-                    token=token,
-                    android=messaging.AndroidConfig(
-                        priority="high",
-                        notification=messaging.AndroidNotification(
-                            channel_id="fall_risk_alerts"
-                        ),
-                    ),
-                    webpush=messaging.WebpushConfig(
-                        notification=messaging.WebpushNotification(
-                            title="Fall Detected",
-                            body="High fall risk detected",
-                            icon="/icons/Icon-192.png",
-                        ),
-                    ),
-                )
-                messaging.send(message)
-                sent += 1
-                print(f"FCM sent to ...{token[-8:]}")
-            except Exception as token_exc:
-                print(f"FCM token error (...{token[-8:]}): {token_exc}")
+        sent_count = 0
+        # Use multicast for batch sending if possible, but messaging.send_each_for_multicast takes a list of tokens
+        # However, to handle individual failures (like invalid token), send_each is better or checking response.
+        
+        message = messaging.MulticastMessage(
+            notification=messaging.Notification(
+                title="Fall Detected",
+                body="High fall risk detected",
+            ),
+            data={
+                "type": "fall_risk",
+                "risk": f"{probability:.4f}",
+                "heart_rate": str(feature_map.get("heart_rate", "")),
+                "body_posture": str(feature_map.get("body_posture", "")),
+                "uid": uid,
+            },
+            tokens=tokens,
+            android=messaging.AndroidConfig(
+                priority="high",
+                ttl=60 * 60,
+                notification=messaging.AndroidNotification(
+                    channel_id="fall_risk_alerts",
+                    sound="default",
+                    default_vibrate_timings=True,
+                    default_light_settings=True,
+                    visibility="public",
+                    priority="high",
+                ),
+            ),
+            webpush=messaging.WebpushConfig(
+                notification=messaging.WebpushNotification(
+                    title="Fall Detected",
+                    body="High fall risk detected",
+                    icon="/icons/Icon-192.png",
+                ),
+            ),
+        )
+
+        response = messaging.send_each_for_multicast(message)
+        print(f"FCM batch sent: {response.success_count} success, {response.failure_count} failure")
+        
+        if response.failure_count > 0:
+            for idx, resp in enumerate(response.responses):
+                if not resp.success:
+                    # Clean up invalid tokens
+                    err_code = resp.exception.code if resp.exception else "unknown"
+                    if err_code in ("registration-token-not-registered", "invalid-argument"):
+                        invalid_token = tokens[idx]
+                        print(f"Removing invalid token: {invalid_token}")
+                        try:
+                            db.collection("users").document(uid).collection("tokens").document(invalid_token).delete()
+                        except Exception as e:
+                            print(f"Failed to delete invalid token: {e}")
+
+        return response.success_count, len(tokens)
+
+    except Exception as e:
+        print(f"FCM error for users/{uid}: {e}")
+        return 0, 0
+
+        if sent > 0:
+            _last_push_sent_at = now
+
         print(f"FCM dispatch complete: {sent}/{len(unique_tokens)} tokens notified")
         return sent, len(unique_tokens)
     except Exception as exc:
