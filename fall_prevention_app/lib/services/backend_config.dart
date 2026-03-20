@@ -17,8 +17,8 @@ String resolveBackendUrl(String? savedUrl) {
 
   switch (defaultTargetPlatform) {
     case TargetPlatform.android:
-      // Use local IP for physical Android device testing
-      return 'http://10.33.97.42:8002';
+      // Use 10.0.2.2 for Android Emulator, or your machine IP (e.g., 172.17.13.203) for physical device
+      return 'http://10.0.2.2:8002';
     default:
       return 'http://127.0.0.1:8002';
   }
