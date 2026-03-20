@@ -9,9 +9,13 @@ import requests
 
 ROOT_DIR = Path(__file__).resolve().parent
 REALTIME_DATA_PATH = ROOT_DIR / "data" / "realtime_data.csv"
-PREDICT_URL = os.getenv("SIMULATION_URL", "http://127.0.0.1:8000/predict")
+PREDICT_URL = os.getenv("SIMULATION_URL", "http://127.0.0.1:8002/predict")
 INTERVAL_SECONDS = 5
+# Use a specific test UID for simulation to verify targeted notifications
+TEST_UID = os.getenv("TEST_UID", "7E9nnDtED5RAOKSLxHr0bUbRzFh1")
+
 FIELDS = [
+    "chest_acc_x",
     "chest_acc_x",
     "chest_acc_y",
     "chest_acc_z",
@@ -42,10 +46,11 @@ def generate_sensor_data() -> dict[str, float | int]:
         "wrist_acc_z": round(random.uniform(8, 12), 2),
         "heart_rate": random.randint(60, 120),
         "body_posture": random.randint(1, 4),
+        "uid": TEST_UID,
     }
 
 
-def post_prediction(sensor_data: dict[str, float | int]) -> tuple[float, bool]:
+def post_prediction(sensor_data: dict[str, float | int | str]) -> tuple[float, bool]:
     response = requests.post(PREDICT_URL, json=sensor_data, timeout=10)
     response.raise_for_status()
     payload = response.json()

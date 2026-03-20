@@ -252,28 +252,23 @@ def send_notification_to_user(
 
     try:
         db = firestore.client()
-        # Query the tokens subcollection for the specific user
-        docs = db.collection("users").document(uid).collection("tokens").stream()
+        # Query the devices subcollection for the specific user
+        # structure: users/{uid}/devices/{deviceId} -> {token: "..."}
+        docs = db.collection("users").document(uid).collection("devices").stream()
         
         tokens: list[str] = []
-        token_refs: list[str] = [] # To keep track for deletion if needed
         
         for doc in docs:
             data = doc.to_dict() or {}
             token_val = data.get("token")
-            # If doc.id is the token, we can use that too, but we check the field
             if isinstance(token_val, str) and token_val.strip():
                 tokens.append(token_val.strip())
-                token_refs.append(token_val.strip()) # Assuming doc ID is token per requirement
 
         if not tokens:
             print(f"No device tokens available for user {uid}")
             return 0, 0
 
-        sent_count = 0
-        # Use multicast for batch sending if possible, but messaging.send_each_for_multicast takes a list of tokens
-        # However, to handle individual failures (like invalid token), send_each is better or checking response.
-        
+        # Create the multicast message
         message = messaging.MulticastMessage(
             notification=messaging.Notification(
                 title="Fall Detected",
@@ -311,30 +306,18 @@ def send_notification_to_user(
         response = messaging.send_each_for_multicast(message)
         print(f"FCM batch sent: {response.success_count} success, {response.failure_count} failure")
         
+        # Handle invalid tokens (cleanup)
         if response.failure_count > 0:
             for idx, resp in enumerate(response.responses):
                 if not resp.success:
-                    # Clean up invalid tokens
                     err_code = resp.exception.code if resp.exception else "unknown"
                     if err_code in ("registration-token-not-registered", "invalid-argument"):
                         invalid_token = tokens[idx]
-                        print(f"Removing invalid token: {invalid_token}")
-                        try:
-                            db.collection("users").document(uid).collection("tokens").document(invalid_token).delete()
-                        except Exception as e:
-                            print(f"Failed to delete invalid token: {e}")
+                        print(f"Token invalid: {invalid_token}. (Cleanup not implemented for devices subcollection yet)")
+                        # In a real app, you'd find the device doc with this token and delete it.
 
         return response.success_count, len(tokens)
 
     except Exception as e:
         print(f"FCM error for users/{uid}: {e}")
-        return 0, 0
-
-        if sent > 0:
-            _last_push_sent_at = now
-
-        print(f"FCM dispatch complete: {sent}/{len(unique_tokens)} tokens notified")
-        return sent, len(unique_tokens)
-    except Exception as exc:
-        print(f"FCM dispatch error: {exc}")
         return 0, 0

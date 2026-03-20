@@ -1,17 +1,17 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../utils/device_utils.dart'; // Import device generation logic
 
-/// Top-level background handler — must be a top-level function.
+/// Top-level background handler must be a top-level function.
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (kDebugMode) {
-    debugPrint('[FCM] Background message received id=${message.messageId} data=${message.data}');
+    debugPrint('[FCM] Background message received id=${message.messageId}');
   }
 }
 
@@ -21,218 +21,187 @@ class NotificationService {
   NotificationService._();
 
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FlutterLocalNotificationsPlugin _localNotifications =
-      FlutterLocalNotificationsPlugin();
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
-  StreamSubscription<RemoteMessage>? _onMessageSub;
-  StreamSubscription<RemoteMessage>? _onMessageOpenedSub;
-  StreamSubscription<String>? _onTokenRefreshSub;
-  bool _initialized = false;
-
-  /// Callback invoked when the user taps a notification.
+  bool _isInitialized = false;
+  
+  /// Callback for notification taps
   void Function(String? payload)? onNotificationTap;
 
-  static const _androidChannel = AndroidNotificationChannel(
+  /// Android channel for high-priority alerts
+  static const AndroidNotificationChannel _androidChannel = AndroidNotificationChannel(
     'fall_risk_alerts',
     'Fall Risk Alerts',
     description: 'High-priority notifications for fall risk detection',
     importance: Importance.max,
+    playSound: true,
   );
 
-  /// Initialize FCM + local notifications. Call once after Firebase.initializeApp().
+  /// 1. Initialize FCM & Local Notifications
   Future<void> initialize() async {
-    if (_initialized) {
-      _log('NotificationService already initialized; skipping duplicate init.');
-      return;
-    }
+    if (_isInitialized) return;
 
-    // Register background handler
-    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
-    _log('Registered background handler.');
-
-    // Request permissions (iOS/Android 13+)
-    final settings = await _messaging.requestPermission(
+    // A. Request Permissions (Web & iOS/Android 13+)
+    NotificationSettings settings = await _messaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
     );
-    _log('Notification permission: ${settings.authorizationStatus}');
+    
+    if (kDebugMode){
+      print('[FCM] Permission status: ${settings.authorizationStatus}');
+    }
 
-    // Initialize local notifications for foreground display
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const darwinInit = DarwinInitializationSettings();
-    const initSettings = InitializationSettings(
-      android: androidInit,
-      iOS: darwinInit,
+    // B. Register Background Handler
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+    // C. Setup Local Notifications (for foreground alerts)
+    const AndroidInitializationSettings androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    
+    // For iOS/macOS (Darwin)
+    const DarwinInitializationSettings darwinSettings = DarwinInitializationSettings();
+
+    const InitializationSettings initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: darwinSettings,
     );
 
+    // Setup local notifications tap
     await _localNotifications.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (response) {
-        _log('Local notification tapped payload=${response.payload}');
         onNotificationTap?.call(response.payload);
       },
     );
 
-    // Create Android notification channel
-    final androidPlugin =
-        _localNotifications.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-    await androidPlugin?.createNotificationChannel(_androidChannel);
-    _log('Android notification channel ensured: ${_androidChannel.id}');
+    // Setup background open tap
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+       onNotificationTap?.call(message.data.toString());
+    });
 
-    // Foreground message listener
-    _onMessageSub = FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
+    // D. Create Android Channel (required for Android 8.0+)
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_androidChannel);
 
-    // When user taps a notification that opened the app from background/terminated
-    _onMessageOpenedSub = FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationOpen);
+    // E. Handle Foreground Messages
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      RemoteNotification? notification = message.notification;
+      AndroidNotification? android = message.notification?.android;
 
-    // Check if app was opened from a terminated state via notification
-    final initialMessage = await _messaging.getInitialMessage();
-    if (initialMessage != null) {
-      _log('App opened from terminated state messageId=${initialMessage.messageId}');
-      _handleNotificationOpen(initialMessage);
-    }
-
-    // Set up token refresh listener
-    _onTokenRefreshSub = _messaging.onTokenRefresh.listen((newToken) {
-      _log('FCM token refreshed: $newToken');
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        saveTokenToFirestore(user.uid, newToken);
+      if (notification != null && android != null) {
+        _localNotifications.show(
+          notification.hashCode,
+          notification.title,
+          notification.body,
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              _androidChannel.id,
+              _androidChannel.name,
+              channelDescription: _androidChannel.description,
+              icon: '@mipmap/ic_launcher',
+              importance: Importance.max,
+              priority: Priority.high,
+            ),
+          ),
+        );
       }
     });
 
-    _initialized = true;
-    _log('NotificationService initialization complete.');
+    // F. Listen for Token Refresh
+    _messaging.onTokenRefresh.listen((newToken) async {
+      await _onTokenRefresh(newToken);
+    });
+
+    _isInitialized = true;
+    if (kDebugMode) print('[FCM] initialized successfully');
   }
 
-  /// Get current FCM token.
+  /// 2. Get Token (Web requires VAPID key handling, if needed)
   Future<String?> getToken() async {
     try {
-      _log('Requesting FCM token. isWeb=$kIsWeb');
-      String? token;
-      if (kIsWeb) {
-        const vapidKey = String.fromEnvironment('FCM_WEB_VAPID_KEY');
-        if (vapidKey.isNotEmpty) {
-           token = await _messaging.getToken(vapidKey: vapidKey);
-        } else {
-           token = await _messaging.getToken();
-        }
-      } else {
-        token = await _messaging.getToken();
-      }
-      
-      _log('FCM token generated: ${token != null && token.isNotEmpty}');
-      return token;
+      // For web, you might pass vapidKey if configured: getToken(vapidKey: "...")
+      return await _messaging.getToken();
     } catch (e) {
-      _error('FCM getToken failed: $e');
+      if (kDebugMode) print('[FCM] Error getting token: $e');
       return null;
     }
   }
 
-  /// Save FCM token to Firestore under users/{uid}/tokens/{token}
-  Future<void> saveTokenToFirestore(String uid, [String? specificToken]) async {
+  /// 3. Save Device Token to Firestore
+  /// Structure: users/{uid}/devices/{deviceId}
+  Future<void> saveDeviceToken(String uid) async {
     try {
-      final token = specificToken ?? await getToken();
-      if (token == null) return;
+      // A. Get FCM Token
+      String? token = await getToken();
+      if (token == null) {
+        if (kDebugMode) print('[FCM] Failed to get token, retrying once...');
+        await Future.delayed(const Duration(seconds: 2));
+        token = await getToken();
+        if (token == null) return; // Still failed
+      }
 
-      final tokenRef = _firestore
+      // B. Get Persistent Device ID
+      String deviceId = await DeviceUtils.getDeviceId();
+
+      // C. Determine Platform
+      String platformName = 'unknown';
+      if (kIsWeb) {
+        platformName = 'web';
+      } else {
+        if (Platform.isAndroid) platformName = 'android';
+        else if (Platform.isIOS) platformName = 'ios';
+      }
+
+      // D. Save to Firestore
+      final deviceRef = _db
           .collection('users')
           .doc(uid)
-          .collection('tokens')
-          .doc(token);
+          .collection('devices')
+          .doc(deviceId);
 
-      await tokenRef.set({
+      await deviceRef.set({
         'token': token,
-        'created_at': FieldValue.serverTimestamp(),
+        'platform': platformName,
         'updated_at': FieldValue.serverTimestamp(),
-        'platform': kIsWeb ? 'web' : (Platform.isAndroid ? 'android' : 'ios'),
+        // Use set with merge: true to avoid overwriting created_at if we wanted to keep it
+        // But for simplicity, we'll just update everything or use set without merge if we want fresh state always
+        'created_at': FieldValue.serverTimestamp(), // This will be overwritten each login, which is fine for "last active" tracking logic roughly
       });
 
-      _log('Token saved to Firestore for user: $uid');
+      if (kDebugMode) {
+        print('[FCM] Token saved for device: $deviceId under user: $uid');
+      }
+
     } catch (e) {
-      _error('Failed to save token to Firestore: $e');
+      if (kDebugMode) print('[FCM] Error saving token to Firestore: $e');
     }
   }
 
-  /// Remove FCM token from Firestore (e.g. on logout)
-  Future<void> removeTokenFromFirestore(String uid) async {
-    try {
-      final token = await getToken();
-      if (token == null) return;
-
-      final tokenRef = _firestore
-          .collection('users')
-          .doc(uid)
-          .collection('tokens')
-          .doc(token);
-
-      await tokenRef.delete();
-      _log('Token removed from Firestore for user: $uid');
-    } catch (e) {
-      _error('Failed to remove token from Firestore: $e');
-    }
-  }
-
-  /// Show a foreground notification using flutter_local_notifications.
-  void _handleForegroundMessage(RemoteMessage message) {
-    _log(
-      'Foreground message received id=${message.messageId} '
-      'title=${message.notification?.title} data=${message.data}',
-    );
-
-    final notification = message.notification;
-    if (notification == null) return;
-
-    _localNotifications.show(
-      notification.hashCode,
-      notification.title ?? 'Fall Risk Alert',
-      notification.body ?? '',
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          _androidChannel.id,
-          _androidChannel.name,
-          channelDescription: _androidChannel.description,
-          importance: Importance.max,
-          priority: Priority.max,
-          icon: '@mipmap/ic_launcher',
-          playSound: true,
-          enableVibration: true,
-        ),
-        iOS: const DarwinNotificationDetails(
-          presentAlert: true,
-          presentBadge: true,
-          presentSound: true,
-        ),
-      ),
-      payload: jsonEncode(message.data),
-    );
-  }
-
-  /// Handle notification tap (background/terminated).
-  void _handleNotificationOpen(RemoteMessage message) {
-    _log('Notification opened id=${message.messageId} data=${message.data}');
-    onNotificationTap?.call(jsonEncode(message.data));
-  }
-
-  Future<void> dispose() async {
-    await _onMessageSub?.cancel();
-    await _onMessageOpenedSub?.cancel();
-    await _onTokenRefreshSub?.cancel();
-    _initialized = false;
-  }
-
-  void _log(String message) {
-    if (kDebugMode) {
-      debugPrint('[FCM] $message');
-    }
-  }
-
-  void _error(String message) {
-    if (kDebugMode) {
-      debugPrint('[ERROR] $message');
+  /// 4. Handle Token Refresh
+  Future<void> _onTokenRefresh(String newToken) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        String deviceId = await DeviceUtils.getDeviceId();
+        
+        await _db
+            .collection('users')
+            .doc(user.uid)
+            .collection('devices')
+            .doc(deviceId)
+            .update({
+          'token': newToken,
+          'updated_at': FieldValue.serverTimestamp(),
+        });
+        
+        if (kDebugMode) print('[FCM] Refreshed token updated in Firestore');
+      } catch (e) {
+        if (kDebugMode) print('[FCM] Error updating refreshed token: $e');
+      }
     }
   }
 }

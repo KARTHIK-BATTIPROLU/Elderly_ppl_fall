@@ -105,20 +105,19 @@ class _AuthWrapperState extends State<AuthWrapper> {
         );
       };
 
-      // Initialize FCM
+      // 1. Initialize FCM
       await _notificationService.initialize();
       if (kDebugMode) {
         debugPrint('[FCM] Notification service initialized.');
       }
+
+      // 2. Save device token to Firestore
+      // Uses persistent device ID logic inside NotificationService
+      await _notificationService.saveDeviceToken(user.uid);
       
-      // Sync token on startup
-      await _notificationService.saveTokenToFirestore(user.uid);
-      if (kDebugMode) {
-        debugPrint('[FCM] Device token synced to Firestore.');
-      }
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('[ERROR] Notification initialization failed: $e');
+        debugPrint('[ERROR] Failed to initialize notifications: $e');
       }
     }
   }

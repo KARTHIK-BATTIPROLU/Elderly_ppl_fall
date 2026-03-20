@@ -1,146 +1,128 @@
-import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'notification_service.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  User? get currentUser => _auth.currentUser;
+  // ---------------------------------------------------------------------------
+  // PUBLIC API
+  // ---------------------------------------------------------------------------
+
+  /// Stream of auth changes (User or null)
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
-  /// Sign up with email and password.
-  /// Creates a new Firebase Auth account and Firestore user document.
+  /// Get current user synchronously
+  User? get currentUser => _auth.currentUser;
+
+  /// Sign up with email and password
+  /// 1. Create Auth User
+  /// 2. Create Firestore Document
   Future<User?> signUp({
     required String email,
     required String password,
   }) async {
     try {
-      final credential = await _auth.createUserWithEmailAndPassword(
-        email: email.trim(),
+      // 1. Create user in Firebase Auth
+      final userCredential = await _auth.createUserWithEmailAndPassword(
+        email: email,
         password: password,
       );
-      final user = credential.user;
+      final user = userCredential.user;
+
       if (user != null) {
-        // Fire-and-forget: don't block sign-up on Firestore write
-        unawaited(_createUserDocument(user));
-        unawaited(NotificationService().saveTokenToFirestore(user.uid));
-        if (kDebugMode) {
-          debugPrint('[AUTH] Sign up successful for ${user.email}');
-        }
+        // 2. Create Firestore User Document
+        await _createOrUpdateUserDocument(user, isNewUser: true);
       }
       return user;
     } on FirebaseAuthException catch (e) {
-      if (kDebugMode) debugPrint('[ERROR] Sign up failed: ${e.code} - ${e.message}');
+      if (kDebugMode) debugPrint("[AuthService] SignUp Error: ${e.code}");
       rethrow;
     } catch (e) {
-      if (kDebugMode) debugPrint('[ERROR] Sign up error: $e');
+      if (kDebugMode) debugPrint("[AuthService] SignUp General Error: $e");
       rethrow;
     }
   }
 
-  /// Sign in with email and password.
-  /// Updates the last_login timestamp in Firestore.
+  /// Log in with email and password
+  /// 1. Sign in Auth User
+  /// 2. Update Firestore Document (last_login)
   Future<User?> login({
     required String email,
     required String password,
   }) async {
     try {
-      final credential = await _auth.signInWithEmailAndPassword(
-        email: email.trim(),
+      // 1. Sign in
+      final userCredential = await _auth.signInWithEmailAndPassword(
+        email: email,
         password: password,
       );
-      final user = credential.user;
+      final user = userCredential.user;
+
       if (user != null) {
-        // Fire-and-forget: don't block login on Firestore write
-        unawaited(_updateLastLogin(user));
-        unawaited(NotificationService().saveTokenToFirestore(user.uid));
-        if (kDebugMode) {
-          debugPrint('[AUTH] Login successful for ${user.email}');
-        }
+        // 2. Update Firestore Document
+        await _createOrUpdateUserDocument(user, isNewUser: false);
       }
       return user;
     } on FirebaseAuthException catch (e) {
-      if (kDebugMode) debugPrint('[ERROR] Login failed: ${e.code} - ${e.message}');
+      if (kDebugMode) debugPrint("[AuthService] Login Error: ${e.code}");
       rethrow;
     } catch (e) {
-      if (kDebugMode) debugPrint('[ERROR] Login error: $e');
+      if (kDebugMode) debugPrint("[AuthService] Login General Error: $e");
       rethrow;
     }
   }
 
-  /// Sign out the current user.
+  /// Sign out
   Future<void> logout() async {
-    try {
-      final user = _auth.currentUser;
-      if (user != null) {
-        await NotificationService().removeTokenFromFirestore(user.uid);
-      }
-      await _auth.signOut();
-      if (kDebugMode) debugPrint('[AUTH] User logged out successfully');
-    } catch (e) {
-      if (kDebugMode) debugPrint('[ERROR] Logout failed: $e');
-      rethrow;
-    }
+    await _auth.signOut();
   }
 
-  /// Create a Firestore user document for a new user.
-  Future<void> _createUserDocument(User user) async {
-    try {
-      await _db.collection('users').doc(user.uid).set({
-        'email': user.email,
-        'created_at': FieldValue.serverTimestamp(),
-      });
-      if (kDebugMode) {
-        debugPrint('[FIRESTORE] User document created for ${user.uid}');
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[ERROR] Firestore user doc create failed: $e');
-      }
-    }
-  }
+  // ---------------------------------------------------------------------------
+  // INTERNAL HELPERS
+  // ---------------------------------------------------------------------------
 
-  /// Update the last_login timestamp for returning users.
-  Future<void> _updateLastLogin(User user) async {
-    try {
-      await _db.collection('users').doc(user.uid).set({
-        'last_login': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      if (kDebugMode) {
-        debugPrint('[FIRESTORE] Last login updated for ${user.uid}');
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        debugPrint('[ERROR] Firestore last_login update failed: $e');
-      }
-    }
-  }
-
-  /// Update the device FCM token in Firestore.
-  /// Called immediately after login and on each token refresh.
-  Future<void> updateDeviceToken(String token) async {
-    final user = _auth.currentUser;
-    if (user == null) {
-      if (kDebugMode) {
-        debugPrint('[ERROR] Cannot update device token; no user logged in');
-      }
-      return;
-    }
+  /// Handles creating or updating the user document in Firestore.
+  /// 
+  /// Logic:
+  /// - If new user: Create document with name, email, created_at, last_login
+  /// - If existing user: Check if doc exists.
+  ///   - If yes: Update last_login
+  ///   - If no: Create document (recovery for missing doc)
+  Future<void> _createOrUpdateUserDocument(User user, {required bool isNewUser}) async {
+    final userRef = _db.collection('users').doc(user.uid);
 
     try {
-      await _db.collection('users').doc(user.uid).set({
-        'device_token': token,
-        'token_updated_at': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      if (kDebugMode) {
-        debugPrint('[FIRESTORE] Device token updated for ${user.uid}');
+      if (isNewUser) {
+        // Optimized path for new users
+        await userRef.set({
+          'name': 'User', // Simple default name
+          'email': user.email,
+          'created_at': FieldValue.serverTimestamp(),
+          'last_login': FieldValue.serverTimestamp(),
+        });
+      } else {
+        // For login: Check if doc exists first
+        final doc = await userRef.get();
+        if (doc.exists) {
+          await userRef.update({
+            'last_login': FieldValue.serverTimestamp(),
+          });
+        } else {
+          // Fallback: Create doc if missing logic
+          await userRef.set({
+            'name': 'User',
+            'email': user.email,
+            'created_at': FieldValue.serverTimestamp(),
+            'last_login': FieldValue.serverTimestamp(),
+          });
+        }
       }
     } catch (e) {
+      // Don't block auth if Firestore fails (e.g. offline), but log it.
       if (kDebugMode) {
-        debugPrint('[ERROR] Device token update failed: $e');
+        debugPrint("[AuthService] Firestore Error: $e");
       }
     }
   }
