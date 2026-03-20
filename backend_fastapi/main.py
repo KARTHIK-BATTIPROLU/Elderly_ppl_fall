@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import random
 import time
@@ -20,25 +21,6 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT_DIR / "model" / "rf_model.pkl"
 REALTIME_DATA_PATH = ROOT_DIR / "data" / "realtime_data.csv"
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "fall-prevention-sys-26")
-
-
-def _resolve_service_account_key_path() -> Path:
-    configured_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_PATH")
-    if configured_path:
-        return Path(configured_path)
-
-    candidates = [
-        ROOT_DIR / "serviceAccountKey.json",
-        ROOT_DIR / "serviceAccountKey.json.json",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    return candidates[0]
-
-
-SERVICE_ACCOUNT_KEY_PATH = _resolve_service_account_key_path()
 
 FEATURES_ORDER = [
     "chest_acc_x",
@@ -64,29 +46,22 @@ def initialize_firebase_admin() -> None:
     if firebase_admin._apps:
         return
 
-    app_options = {"projectId": FIREBASE_PROJECT_ID}
+    key_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_KEY")
+    if key_json:
+        try:
+            cred_dict = json.loads(key_json)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            print("✅ Firebase initialized from ENV")
+            return
+        except Exception as e:
+            print(f"❌ Error initializing Firebase from ENV: {e}")
 
-    if SERVICE_ACCOUNT_KEY_PATH.exists():
-        firebase_admin.initialize_app(
-            credentials.Certificate(str(SERVICE_ACCOUNT_KEY_PATH)),
-            options=app_options,
-        )
-        print(f"Initialized Firebase Admin with service account: {SERVICE_ACCOUNT_KEY_PATH}")
-        return
-
+    print("❌ Firebase key NOT found in environment. Initializing with default options (no auth).")
     try:
-        google.auth.default()
-        firebase_admin.initialize_app(credentials.ApplicationDefault(), options=app_options)
-        print("Initialized Firebase Admin with application default credentials")
-    except DefaultCredentialsError:
-        firebase_admin.initialize_app(options=app_options)
-        print(
-            "WARNING: Firebase Admin initialized WITHOUT credentials. "
-            "FCM push notifications will NOT work.\n"
-            "  Fix: download serviceAccountKey.json from Firebase Console → "
-            "Project Settings → Service Accounts → Generate new private key, "
-            "then place it in the project root."
-        )
+        firebase_admin.initialize_app(options={"projectId": FIREBASE_PROJECT_ID})
+    except Exception as e:
+        print(f"⚠️ Default initialization failed: {e}")
 
 
 @asynccontextmanager
