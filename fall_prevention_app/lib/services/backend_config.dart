@@ -18,7 +18,7 @@ String resolveBackendUrl(String? savedUrl) {
   switch (defaultTargetPlatform) {
     case TargetPlatform.android:
       // Use 10.0.2.2 for Android Emulator, or your machine IP (e.g., 172.17.13.203) for physical device
-      return 'http://10.0.2.2:8002';
+      return 'http://172.17.13.203:8002';
     default:
       return 'http://127.0.0.1:8002';
   }
