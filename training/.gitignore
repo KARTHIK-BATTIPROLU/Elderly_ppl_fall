@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Training outputs (keep in model/ directory)
+*.npz
+*.pkl
+*.h5
+*.png
+
+# Logs
+*.log

@@ -5,3 +5,7 @@ pandas
 scikit-learn==1.8.0
 joblib
 python-dotenv
+tensorflow>=2.13.0
+numpy
+matplotlib
+seaborn

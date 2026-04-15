@@ -1,6 +1,6 @@
 # Elder Fall Prevention
 
-A Flutter mobile and web monitoring client backed by FastAPI, a Random Forest fall-risk model, Firestore logging, and Firebase Cloud Messaging.
+A Flutter mobile and web monitoring client backed by FastAPI, a **BiLSTM (Bidirectional LSTM)** fall-risk model, Firestore logging, and Firebase Cloud Messaging.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Firebase Authentication
 ↓
 FastAPI Backend
 ↓
-ML Model Prediction
+BiLSTM Model Prediction (Sequence-based)
 ↓
 Firestore Logging
 ↓
@@ -19,33 +19,76 @@ Firebase Cloud Messaging Push Notification
 ## Project Structure
 
 - `backend_fastapi/` - FastAPI backend and Firebase Admin integration
-- `training/` - model training script
-- `model/` - trained `rf_model.pkl`
+- `training/` - LSTM model training scripts (preprocessing + training)
+- `model/` - trained `bilstm_model.h5` and `scaler.pkl`
 - `data/` - training and simulated realtime CSV data
 - `fall_prevention_app/` - Flutter mobile and web app
 - `simulate.py` - 5-second simulated sensor generator that posts to FastAPI
 
+## 🆕 Model Migration: Random Forest → BiLSTM
+
+The project has been upgraded from Random Forest to **Bidirectional LSTM** for better temporal pattern recognition.
+
+### Key Improvements:
+- ✅ **Temporal awareness**: Analyzes sequences of 20 timesteps instead of single points
+- ✅ **Better accuracy**: Captures patterns over time (e.g., gradual posture changes)
+- ✅ **Robust to noise**: Uses context from multiple data points
+
+### Training the BiLSTM Model
+
+See detailed instructions in [`training/README_LSTM.md`](training/README_LSTM.md)
+
+**Quick start:**
+```bash
+cd training
+python run_training_pipeline.py
+```
+
+This will:
+1. Preprocess data into sequences (`processed_data.npz`)
+2. Train BiLSTM model (`bilstm_model.h5`)
+3. Generate evaluation plots
+
+**Manual steps:**
+```bash
+# Step 1: Preprocess data
+python preprocess_lstm.py
+
+# Step 2: Train model
+python train_bilstm.py
+```
+
 ## Backend Setup
 
 1. Create and activate a Python virtual environment.
-2. Install dependencies:
+2. Install dependencies (includes TensorFlow for LSTM):
 
 ```powershell
+cd backend_fastapi
 pip install -r requirements.txt
 ```
 
-3. Configure Firebase Admin credentials:
+3. **Train the BiLSTM model** (if not already trained):
+
+```powershell
+cd ../training
+python run_training_pipeline.py
+```
+
+4. Configure Firebase Admin credentials:
 
 ```powershell
 $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\service-account.json"
 ```
 
-4. Run the backend:
+5. Run the backend:
 
 ```powershell
-cd backend_fastapi
+cd ../backend_fastapi
 uvicorn main:app --host 0.0.0.0 --port 8002 --reload
 ```
+
+**Note**: The backend now loads `bilstm_model.h5` instead of `rf_model.pkl`. Ensure the model is trained before starting the backend.
 
 ## Simulation
 
@@ -108,9 +151,24 @@ Set the server URL on the Flutter login/configuration screen to:
 2. The app signs in anonymously with Firebase Auth.
 3. The app initializes FCM and stores `users/{uid}/device_token` in Firestore.
 4. Every 5 seconds the dashboard fetches `/random-data` and sends it to `/predict`.
-5. FastAPI runs the ML model.
-6. Predictions are logged to Firestore.
-7. If a fall is detected, FastAPI sends an FCM push notification.
+5. **FastAPI maintains a buffer of the last 20 data points per user**.
+6. **FastAPI runs the BiLSTM model on the sequence** (20 timesteps × 8 features).
+7. Predictions are logged to Firestore.
+8. If a fall is detected, FastAPI sends an FCM push notification.
+
+## How BiLSTM Prediction Works
+
+Unlike Random Forest (single point), BiLSTM analyzes **sequences**:
+
+1. **First prediction**: Buffer has only 1 point → Padded to 20 by repetition
+2. **Subsequent predictions**: Buffer accumulates points (up to 20)
+3. **After 20 predictions**: Buffer is full → Uses real temporal sequence
+4. **Normalization**: Sequence is normalized using `scaler.pkl` before prediction
+
+This approach provides:
+- ✅ Immediate predictions (no waiting for buffer to fill)
+- ✅ Improving accuracy as buffer fills
+- ✅ Full temporal context after 20 data points
 
 ## Verification Checklist
 

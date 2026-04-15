@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,9 @@ from typing import Any
 import firebase_admin
 import google.auth
 import joblib
+import numpy as np
 import pandas as pd
+import tensorflow as tf
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import credentials, firestore, messaging
@@ -18,7 +21,8 @@ from google.auth.exceptions import DefaultCredentialsError
 from pydantic import BaseModel, Field
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-MODEL_PATH = ROOT_DIR / "model" / "rf_model.pkl"
+MODEL_PATH = ROOT_DIR / "model" / "bilstm_model.h5"
+SCALER_PATH = ROOT_DIR / "model" / "scaler.pkl"
 REALTIME_DATA_PATH = ROOT_DIR / "data" / "realtime_data.csv"
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "fall-prevention-sys-26")
 
@@ -33,13 +37,17 @@ FEATURES_ORDER = [
     "body_posture",
 ]
 
-RISK_THRESHOLD = float(os.getenv("RISK_THRESHOLD", "0.40"))
+SEQUENCE_LENGTH = 20  # Number of timesteps required by LSTM
+RISK_THRESHOLD = float(os.getenv("RISK_THRESHOLD", "0.20"))  # Lowered to 20% for more fall detections
 NOTIFICATION_COOLDOWN_SECONDS = int(
-    os.getenv("NOTIFICATION_COOLDOWN_SECONDS", "30")
+    os.getenv("NOTIFICATION_COOLDOWN_SECONDS", "0")  # No cooldown - notify every time
 )
 
 # Global cooldown guard per user
 _last_push_sent_at: dict[str, float] = {}
+
+# Global buffer to store recent data points per user (for sequence prediction)
+_user_data_buffers: dict[str, deque] = {}
 
 
 def initialize_firebase_admin() -> None:
@@ -68,9 +76,16 @@ def initialize_firebase_admin() -> None:
 async def lifespan(app: FastAPI):
     if not MODEL_PATH.exists():
         raise FileNotFoundError(f"Model file not found at: {MODEL_PATH}")
-    print(f"Loading model from: {MODEL_PATH}")
-    app.state.model = joblib.load(MODEL_PATH)
-    print("Model loaded successfully")
+    if not SCALER_PATH.exists():
+        raise FileNotFoundError(f"Scaler file not found at: {SCALER_PATH}")
+    
+    print(f"Loading BiLSTM model from: {MODEL_PATH}")
+    app.state.model = tf.keras.models.load_model(MODEL_PATH)
+    print("✅ BiLSTM model loaded successfully")
+    
+    print(f"Loading scaler from: {SCALER_PATH}")
+    app.state.scaler = joblib.load(SCALER_PATH)
+    print("✅ Scaler loaded successfully")
 
     if not REALTIME_DATA_PATH.exists():
         print(f"WARNING: Realtime data file not found at: {REALTIME_DATA_PATH}")
@@ -149,9 +164,36 @@ def predict(
 ):
     print(f"Prediction request received. UID={payload.uid}")
     feature_map = payload.model_dump()
-    features_df = pd.DataFrame([feature_map], columns=FEATURES_ORDER)
-
-    probability = float(app.state.model.predict_proba(features_df)[0][1])
+    
+    # Extract features in correct order
+    features = [feature_map[col] for col in FEATURES_ORDER]
+    features_array = np.array(features, dtype=np.float32).reshape(1, -1)
+    
+    # Get or create buffer for this user
+    user_id = payload.uid if payload.uid else "anonymous"
+    
+    if user_id not in _user_data_buffers:
+        _user_data_buffers[user_id] = deque(maxlen=SEQUENCE_LENGTH)
+    
+    buffer = _user_data_buffers[user_id]
+    buffer.append(features)
+    
+    # Prepare sequence for LSTM
+    if len(buffer) < SEQUENCE_LENGTH:
+        # Not enough data yet - pad with repetition of current point
+        print(f"Buffer has {len(buffer)}/{SEQUENCE_LENGTH} points. Padding with repetition.")
+        sequence = np.array([features] * SEQUENCE_LENGTH, dtype=np.float32)
+    else:
+        # Use the full buffer
+        sequence = np.array(list(buffer), dtype=np.float32)
+    
+    # Normalize using the scaler
+    sequence_flat = sequence.reshape(-1, len(FEATURES_ORDER))
+    sequence_normalized = app.state.scaler.transform(sequence_flat)
+    sequence_normalized = sequence_normalized.reshape(1, SEQUENCE_LENGTH, len(FEATURES_ORDER))
+    
+    # Predict using BiLSTM
+    probability = float(app.state.model.predict(sequence_normalized, verbose=0)[0][0])
     fall_detected = probability >= RISK_THRESHOLD
     notification_sent_count = 0
     notification_target_count = 0

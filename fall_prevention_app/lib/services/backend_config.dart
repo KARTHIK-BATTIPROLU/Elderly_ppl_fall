@@ -17,8 +17,8 @@ String resolveBackendUrl(String? savedUrl) {
 
   switch (defaultTargetPlatform) {
     case TargetPlatform.android:
-      // Use production Render URL for widespread access
-      return 'https://elderly-ppl-fall.onrender.com';
+      // Use local PC IP address for development
+      return 'http://192.168.0.10:8002';
     default:
       return 'http://127.0.0.1:8002';
   }
